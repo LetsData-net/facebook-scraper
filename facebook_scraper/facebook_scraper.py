@@ -1085,6 +1085,7 @@ class FacebookScraper:
 
                         # extract only relevant posts
                         post = extract_post_fn(post_element, options=options, request_fn=self.get)
+                        logger.info("Current post time: %s", post["time"])
 
                         if remove_source:
                             post.pop("source", None)
