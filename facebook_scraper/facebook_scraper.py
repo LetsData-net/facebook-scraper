@@ -74,6 +74,7 @@ class FacebookScraper:
         self.request_count = 0
 
         self.account_is_disabled = None
+        self.next_page_is_missing = None
 
     def set_user_agent(self, user_agent):
         self.session.headers["User-Agent"] = user_agent
@@ -1063,81 +1064,86 @@ class FacebookScraper:
             show_every = 50
             done = False
 
-            for page in iter_pages_fn():
+            try:
+                for page in iter_pages_fn():
 
-                for post_element in page:
-                    try:
-                        # get only time of post
-                        partial_post = PostExtractor(post_element, kwargs, self.get).extract_time()
+                    for post_element in page:
+                        try:
+                            # get only time of post
+                            partial_post = PostExtractor(post_element, kwargs, self.get).extract_time()
 
-                        # date is None, no way to check start_date, yield it
-                        if partial_post["time"] is None:
-                            null_date_posts += 1
+                            # date is None, no way to check start_date, yield it
+                            if partial_post["time"] is None:
+                                null_date_posts += 1
 
-                        # check if greater than end_date if end_date is not None
-                        if partial_post["time"] is not None and end_date is not None and \
-                                partial_post['time'] > end_date:
-                            continue
+                            # check if greater than end_date if end_date is not None
+                            if partial_post["time"] is not None and end_date is not None and \
+                                    partial_post['time'] > end_date:
+                                continue
 
-                        # date is above start_date, yield it
-                        if partial_post['time'] > start_date:
-                            recurrent_past_posts = 0
+                            # date is above start_date, yield it
+                            if partial_post['time'] > start_date:
+                                recurrent_past_posts = 0
 
-                        # extract only relevant posts
-                        post = extract_post_fn(post_element, options=options, request_fn=self.get)
-                        logger.info("Current post time: %s", post["time"])
+                            # extract only relevant posts
+                            post = extract_post_fn(post_element, options=options, request_fn=self.get)
+                            logger.info("Current post time: %s", post["time"])
 
-                        if remove_source:
-                            post.pop("source", None)
+                            if remove_source:
+                                post.pop("source", None)
 
-                        # if any of above, yield the post and continue
-                        if partial_post["time"] is None or partial_post['time'] > start_date:
-                            total_scraped_posts += 1
-                            if total_scraped_posts % show_every == 0:
-                                logger.info("Posts scraped: %s", total_scraped_posts)
+                            # if any of above, yield the post and continue
+                            if partial_post["time"] is None or partial_post['time'] > start_date:
+                                total_scraped_posts += 1
+                                if total_scraped_posts % show_every == 0:
+                                    logger.info("Posts scraped: %s", total_scraped_posts)
 
-                            yield post
-                            continue
+                                yield post
+                                continue
 
-                        # else, the date is behind the date limit
-                        recurrent_past_posts += 1
+                            # else, the date is behind the date limit
+                            recurrent_past_posts += 1
 
-                        # and it has reached the max_past_limit posts
-                        if recurrent_past_posts >= max_past_limit:
+                            # and it has reached the max_past_limit posts
+                            if recurrent_past_posts >= max_past_limit:
+                                done = True
+                                logger.info(
+                                    "Sequential posts behind latest_date reached. Stopping scraping."
+                                )
+                                logger.info(
+                                    "Posts with null date: %s",
+                                    null_date_posts,
+                                )
+                                break
+
+                            # or the text is not banned (repeated)
+                            if post["text"] is not None and post["text"] not in pinned_posts:
+                                pinned_posts.append(post["text"])
+                                logger.warning(
+                                    "Sequential post #%s behind the date limit: %s. Ignored (in logs) from now on.",
+                                    recurrent_past_posts,
+                                    post["time"],
+                                )
+
+                        except (exceptions.AccountDisabled, exceptions.TemporarilyBanned) as e:
+                            self.account_is_disabled = True
+                            logger.exception(e)
                             done = True
-                            logger.info(
-                                "Sequential posts behind latest_date reached. Stopping scraping."
-                            )
-                            logger.info(
-                                "Posts with null date: %s",
-                                null_date_posts,
-                            )
                             break
 
-                        # or the text is not banned (repeated)
-                        if post["text"] is not None and post["text"] not in pinned_posts:
-                            pinned_posts.append(post["text"])
-                            logger.warning(
-                                "Sequential post #%s behind the date limit: %s. Ignored (in logs) from now on.",
-                                recurrent_past_posts,
-                                post["time"],
+                        except Exception as e:
+                            logger.exception(
+                                "An exception has occured during scraping: %s. Omitting the post...",
+                                e,
                             )
 
-                    except (exceptions.AccountDisabled, exceptions.TemporarilyBanned) as e:
-                        self.account_is_disabled = True
-                        logger.exception(e)
-                        done = True
+                    # if max_past_limit, stop
+                    if done:
                         break
 
-                    except Exception as e:
-                        logger.exception(
-                            "An exception has occured during scraping: %s. Omitting the post...",
-                            e,
-                        )
-
-                # if max_past_limit, stop
-                if done:
-                    break
+            except exceptions.NextPageNotFoundError as e:
+                self.next_page_is_missing = True
+                logger.exception(e)
 
         # else, iterate over pages as usual
         else:

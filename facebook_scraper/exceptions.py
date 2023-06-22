@@ -36,5 +36,10 @@ class LoginError(Exception):
 
 class UnexpectedResponse(Exception):
     '''Facebook served something weird'''
+    pass
+
+
+class NextPageNotFoundError(Exception):
+    '''Failed to find next page'''
 
     pass
